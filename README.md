@@ -1,1 +1,1 @@
-# cv-model-exploration
+# EmoGo ML
