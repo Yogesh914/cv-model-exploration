@@ -1,5 +1,6 @@
-import torch
+import transformers
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+import torch
 from moviepy.editor import VideoFileClip
 import numpy as np
 import os
@@ -7,38 +8,27 @@ from pydub import AudioSegment
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import noisereduce as nr
+import warnings
+import sys
 
 """
 Transcribes a list of videos using the OpenAI Whisper model and saves the transcriptions
 as a new column in the input dataframe CSV.
 
-Requires the following packages to be installed:
-- torch
-- transformers
-- moviepy
-- numpy
-- pandas
-- pydub
-- noisereduce
-
 Note: Using a <video_folder> that contains the video files is necessary.
 
-Usage: transcribe_videos.py --input_csv <input_csv> --output_csv <output_csv> --video_folder <video_folder>
+Usage: transcribe_videos.py --input_csv <input_csv> 
 
 Options:
     --input_csv       Path to the input CSV file containing video file paths.
-    --output_csv      Path to the output CSV file where the processed data will be saved.
 """
 
+warnings.filterwarnings("ignore")
+
+model = AutoModelForSpeechSeq2Seq.from_pretrained("./models/whisper_large_v3")
+processor = AutoProcessor.from_pretrained("./models/whisper_large_v3")
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-model_id = "openai/whisper-large-v3"
-
-model = AutoModelForSpeechSeq2Seq.from_pretrained(
-    model_id, use_safetensors=True, torch_dtype=torch.float16, low_cpu_mem_usage=True
-)
-model.to(device)
-processor = AutoProcessor.from_pretrained(model_id)
 
 pipe = pipeline(
     "automatic-speech-recognition",
@@ -83,10 +73,10 @@ class AudioDataset(Dataset):
         audio_tensor = torch.from_numpy(audio_array)
         return audio_tensor, sample_rate
 
-def transcribe_videos(input_csv, output_csv):
-    df = pd.read_csv(input_csv)
-    video_files = df['file_path'].tolist()
-    
+def main(input_csv_path):
+    df = pd.read_csv(input_csv_path)
+    video_files = df['filepath'].tolist()
+
     dataset = AudioDataset(video_files)
     batch_size = 1
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -103,14 +93,9 @@ def transcribe_videos(input_csv, output_csv):
         transcriptions.append(transcription)
 
     df['Transcriptions'] = transcriptions
-    df.to_csv(output_csv, index=False)
-    print(f"Transcriptions saved to {output_csv}")
+    df.to_csv(input_csv_path, index=False)
+    print(f"Transcriptions added to {input_csv_path}")
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Transcribe videos and add transcriptions to dataframe")
-    parser.add_argument('--input_csv', type=str, required=True, help="Path to the input CSV file containing video file paths")
-    parser.add_argument('--output_csv', type=str, required=True, help="Path to the output CSV file where the processed data will be saved")
-
-    args = parser.parse_args()
-    transcribe_videos(args.input_csv, args.output_csv, args.video_folder)
+    input_csv_path = sys.argv[1]
+    main(input_csv_path)
