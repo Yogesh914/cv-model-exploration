@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import noisereduce as nr
 import warnings
 import sys
+from tqdm import tqdm
 
 """
 Transcribes a list of videos using the OpenAI Whisper model and saves the transcriptions
@@ -18,17 +19,15 @@ as a new column in the input dataframe CSV.
 Note: Using a <video_folder> that contains the video files is necessary.
 
 Usage: transcribe_videos.py --input_csv <input_csv> 
-
-Options:
-    --input_csv       Path to the input CSV file containing video file paths.
 """
 
 warnings.filterwarnings("ignore")
 
-model = AutoModelForSpeechSeq2Seq.from_pretrained("./models/whisper_large_v3")
-processor = AutoProcessor.from_pretrained("./models/whisper_large_v3")
+model = AutoModelForSpeechSeq2Seq.from_pretrained("../models/whisper-large-v3")
+processor = AutoProcessor.from_pretrained("../models/whisper-large-v3")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+print(device)
 
 pipe = pipeline(
     "automatic-speech-recognition",
@@ -40,7 +39,7 @@ pipe = pipeline(
     batch_size=16,
     return_timestamps=True,
     device=device,
-    torch_dtype=torch.float16
+    torch_dtype=torch.float32
 )
 
 def process_video(video_file):
@@ -57,45 +56,30 @@ def process_video(video_file):
     audio_array = audio_array.astype(np.float32) / (2**15)
 
     audio_array = nr.reduce_noise(y=audio_array, sr=16000)
-
     return audio_array, audio_segment.frame_rate
 
-class AudioDataset(Dataset):
-    def __init__(self, video_files):
-        self.video_files = video_files
+def transcribe(path):
+    try:
+        audio_array, frame_rate = process_video(path)
+        transcription = pipe({"array":audio_array, "sampling_rate":frame_rate}, generate_kwargs={"language": "english"})["text"]
+        return transcription
+    except Exception as e:
+        print(f"Error Processing Video: {path}")
+        return None
 
-    def __len__(self):
-        return len(self.video_files)
-
-    def __getitem__(self, idx):
-        video_file = self.video_files[idx]
-        audio_array, sample_rate = process_video(video_file)
-        audio_tensor = torch.from_numpy(audio_array)
-        return audio_tensor, sample_rate
-
-def main(input_csv_path):
+def main(input_csv_path="../data/file_paths.csv", output_csv_path="../data/transcriptions.csv"):
     df = pd.read_csv(input_csv_path)
-    video_files = df['filepath'].tolist()
+    df["error"] = False
+    df['transcription'] = None
 
-    dataset = AudioDataset(video_files)
-    batch_size = 1
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+    for idx, row in tqdm(df.iterrows(), total=df.shape[0]):
+        transcription = transcribe(row['file_path'])
+        if transcription is None:
+            df.at[idx, "error"] = True
+        df.at[idx, "transcription"] = transcription
 
-    transcriptions = []
-    for batch in dataloader:
-        audio_tensors, sample_rates = batch
-        audio_tensor = audio_tensors[0]
-        sample_rate = sample_rates[0].item()
-        audio_numpy = audio_tensor.numpy()
-        audio_dict = {"path": "audio_file", "array": audio_numpy, "sampling_rate": sample_rate}
-        result = pipe(audio_dict, batch_size=1)
-        transcription = result["text"]
-        transcriptions.append(transcription)
-
-    df['Transcriptions'] = transcriptions
-    df.to_csv(input_csv_path, index=False)
-    print(f"Transcriptions added to {input_csv_path}")
+    df.to_csv(output_csv_path, index=False)
+    print(f"Transcriptions added to {output_csv_path}")
 
 if __name__ == "__main__":
-    input_csv_path = sys.argv[1]
-    main(input_csv_path)
+    main()
